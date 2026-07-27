@@ -16,7 +16,7 @@ static inline data_t sigm(data_t v) { return 1.0f / (1.0f + expf(-v)); }
 
 // dot product with PAR partial sums so the pipeline reaches low II with floats
 static data_t dot(const float *w, const data_t *x, int n) {
-#pragma HLS INLINE off
+#pragma HLS INLINE
     data_t ps[PAR];
 #pragma HLS ARRAY_PARTITION variable=ps complete
     for (int i = 0; i < PAR; i++) {
@@ -24,7 +24,7 @@ static data_t dot(const float *w, const data_t *x, int n) {
         ps[i] = 0.0f;
     }
     for (int k = 0; k < n; k += PAR) {
-#pragma HLS PIPELINE II=4
+#pragma HLS PIPELINE
         for (int j = 0; j < PAR; j++) {
 #pragma HLS UNROLL
             int idx = k + j;
@@ -112,7 +112,6 @@ extern "C" void pcnn_step(const data_t x[N_FEAT], int mode,
 #pragma HLS ARRAY_PARTITION variable=hn complete
 #pragma HLS ARRAY_PARTITION variable=cn complete
         for (int u = 0; u < LSTM_H; u++) {
-#pragma HLS PIPELINE II=1
             data_t gi = bih_l[0 * LSTM_H + u] + bhh_l[0 * LSTM_H + u]
                       + dot(&wih_l[(0 * LSTM_H + u) * in_sz], layer_in, in_sz)
                       + dot(&whh_l[(0 * LSTM_H + u) * LSTM_H], h[l], LSTM_H);
@@ -139,24 +138,48 @@ extern "C" void pcnn_step(const data_t x[N_FEAT], int mode,
     }
 
     // ---- layer norm --------------------------------------------------------
-    data_t mean = 0.0f;
-    for (int i = 0; i < LSTM_H; i++) {
+    data_t ps_mean[16];
+#pragma HLS ARRAY_PARTITION variable=ps_mean complete
+    for (int i = 0; i < 16; i++) {
+#pragma HLS UNROLL
+        ps_mean[i] = 0.0f;
+    }
+    for (int i = 0; i < LSTM_H; i += 16) {
 #pragma HLS PIPELINE II=1
-#pragma HLS UNROLL factor=16
-        mean += layer_in[i];
+        for (int j = 0; j < 16; j++) {
+#pragma HLS UNROLL
+            ps_mean[j] += layer_in[i + j];
+        }
+    }
+    data_t mean = 0.0f;
+    for (int i = 0; i < 16; i++) {
+#pragma HLS UNROLL
+        mean += ps_mean[i];
     }
     mean /= (data_t)LSTM_H;
-    data_t var = 0.0f;
-    for (int i = 0; i < LSTM_H; i++) {
+    data_t ps_var[16];
+#pragma HLS ARRAY_PARTITION variable=ps_var complete
+    for (int i = 0; i < 16; i++) {
+#pragma HLS UNROLL
+        ps_var[i] = 0.0f;
+    }
+    for (int i = 0; i < LSTM_H; i += 16) {
 #pragma HLS PIPELINE II=1
-#pragma HLS UNROLL factor=16
-        data_t d = layer_in[i] - mean;
-        var += d * d;
+        for (int j = 0; j < 16; j++) {
+#pragma HLS UNROLL
+            data_t d = layer_in[i + j] - mean;
+            ps_var[j] += d * d;
+        }
+    }
+    data_t var = 0.0f;
+    for (int i = 0; i < 16; i++) {
+#pragma HLS UNROLL
+        var += ps_var[i];
     }
     var /= (data_t)LSTM_H;
     const data_t inv_std = 1.0f / sqrtf(var + 1e-5f);
     data_t ln[LSTM_H];
-#pragma HLS ARRAY_PARTITION variable=ln cyclic factor=16
+#pragma HLS ARRAY_PARTITION variable=ln complete
     for (int i = 0; i < LSTM_H; i++) {
 #pragma HLS PIPELINE II=1
 #pragma HLS UNROLL factor=16
@@ -168,7 +191,7 @@ extern "C" void pcnn_step(const data_t x[N_FEAT], int mode,
 #pragma HLS ARRAY_PARTITION variable=o1 complete
     for (int i = 0; i < OUT_NN; i++) {
 #pragma HLS PIPELINE II=1
-#pragma HLS UNROLL factor=8
+#pragma HLS UNROLL factor=4
         o1[i] = tanhf(dot(&W_OUT1[i * LSTM_H], ln, LSTM_H) + B_OUT1[i]);
     }
     data_t o2 = tanhf(dot(W_OUT2, o1, OUT_NN) + B_OUT2[0]);
