@@ -89,10 +89,8 @@ extern "C" void pcnn_step(const data_t x[N_FEAT], int mode,
 
     // ---- LSTM stack: 3 layers, hidden LSTM_H -------------------------------
     // PyTorch gate order in weights: [i, f, g, o]
-    static const float *WIH[LSTM_L] = { LSTM_WIH0, LSTM_WIH1, LSTM_WIH2 };
-    static const float *WHH[LSTM_L] = { LSTM_WHH0, LSTM_WHH1, LSTM_WHH2 };
-    static const float *BIH[LSTM_L] = { LSTM_BIH0, LSTM_BIH1, LSTM_BIH2 };
-    static const float *BHH[LSTM_L] = { LSTM_BHH0, LSTM_BHH1, LSTM_BHH2 };
+    // NOTE: HLS cannot synthesize arrays of pointers (float**).
+    // Use inline selection functions instead — HLS constant-folds these.
 
     data_t layer_in[LSTM_H];   // max(IN_NN, LSTM_H)
 #pragma HLS ARRAY_PARTITION variable=layer_in cyclic factor=16
@@ -104,23 +102,29 @@ extern "C" void pcnn_step(const data_t x[N_FEAT], int mode,
     }
 
     for (int l = 0; l < LSTM_L; l++) {
+        // select weight/bias arrays for this layer without pointer-to-pointer
+        const float *wih_l = (l == 0) ? LSTM_WIH0 : (l == 1) ? LSTM_WIH1 : LSTM_WIH2;
+        const float *whh_l = (l == 0) ? LSTM_WHH0 : (l == 1) ? LSTM_WHH1 : LSTM_WHH2;
+        const float *bih_l = (l == 0) ? LSTM_BIH0 : (l == 1) ? LSTM_BIH1 : LSTM_BIH2;
+        const float *bhh_l = (l == 0) ? LSTM_BHH0 : (l == 1) ? LSTM_BHH1 : LSTM_BHH2;
+
         data_t hn[LSTM_H], cn[LSTM_H];
 #pragma HLS ARRAY_PARTITION variable=hn complete
 #pragma HLS ARRAY_PARTITION variable=cn complete
         for (int u = 0; u < LSTM_H; u++) {
 #pragma HLS PIPELINE II=1
-            data_t gi = BIH[l][0 * LSTM_H + u] + BHH[l][0 * LSTM_H + u]
-                      + dot(&WIH[l][(0 * LSTM_H + u) * in_sz], layer_in, in_sz)
-                      + dot(&WHH[l][(0 * LSTM_H + u) * LSTM_H], h[l], LSTM_H);
-            data_t gf = BIH[l][1 * LSTM_H + u] + BHH[l][1 * LSTM_H + u]
-                      + dot(&WIH[l][(1 * LSTM_H + u) * in_sz], layer_in, in_sz)
-                      + dot(&WHH[l][(1 * LSTM_H + u) * LSTM_H], h[l], LSTM_H);
-            data_t gg = BIH[l][2 * LSTM_H + u] + BHH[l][2 * LSTM_H + u]
-                      + dot(&WIH[l][(2 * LSTM_H + u) * in_sz], layer_in, in_sz)
-                      + dot(&WHH[l][(2 * LSTM_H + u) * LSTM_H], h[l], LSTM_H);
-            data_t go = BIH[l][3 * LSTM_H + u] + BHH[l][3 * LSTM_H + u]
-                      + dot(&WIH[l][(3 * LSTM_H + u) * in_sz], layer_in, in_sz)
-                      + dot(&WHH[l][(3 * LSTM_H + u) * LSTM_H], h[l], LSTM_H);
+            data_t gi = bih_l[0 * LSTM_H + u] + bhh_l[0 * LSTM_H + u]
+                      + dot(&wih_l[(0 * LSTM_H + u) * in_sz], layer_in, in_sz)
+                      + dot(&whh_l[(0 * LSTM_H + u) * LSTM_H], h[l], LSTM_H);
+            data_t gf = bih_l[1 * LSTM_H + u] + bhh_l[1 * LSTM_H + u]
+                      + dot(&wih_l[(1 * LSTM_H + u) * in_sz], layer_in, in_sz)
+                      + dot(&whh_l[(1 * LSTM_H + u) * LSTM_H], h[l], LSTM_H);
+            data_t gg = bih_l[2 * LSTM_H + u] + bhh_l[2 * LSTM_H + u]
+                      + dot(&wih_l[(2 * LSTM_H + u) * in_sz], layer_in, in_sz)
+                      + dot(&whh_l[(2 * LSTM_H + u) * LSTM_H], h[l], LSTM_H);
+            data_t go = bih_l[3 * LSTM_H + u] + bhh_l[3 * LSTM_H + u]
+                      + dot(&wih_l[(3 * LSTM_H + u) * in_sz], layer_in, in_sz)
+                      + dot(&whh_l[(3 * LSTM_H + u) * LSTM_H], h[l], LSTM_H);
             cn[u] = sigm(gf) * c[l][u] + sigm(gi) * tanhf(gg);
             hn[u] = sigm(go) * tanhf(cn[u]);
         }
