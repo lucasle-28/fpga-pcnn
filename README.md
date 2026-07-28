@@ -19,8 +19,10 @@ the recurrent step-by-step use of the PyTorch model in `Model.predict()`.
                                     exports headers + golden vectors
     python/export_weights_pytorch.py  exports a *real* repo checkpoint
                                     (best_model.pt) to the same headers
-    hls/pcnn.h, pcnn.cpp            Vitis HLS top function `pcnn_step`
-    hls/pcnn_tb.cpp                 C-sim testbench vs golden vectors
+    harvard_to_pcnn.py              Converts Harvard SEC data to PCNN 'Mid' schema
+                                    and generates HLS test vectors (tb_x/tb_y)
+    hls/pcnn.h, pcnn.cpp            Vitis HLS top function `pcnn_step` (optimized PAR=16)
+    hls/pcnn_tb.cpp                 C-sim testbench vs golden vectors (or ground truth tb_y.txt)
     hls/run_hls.tcl                 HLS build script (xczu9eg-ffvb1156-2-e)
     hls/weights/pcnn_weights.h      generated weights (~1.4 MB float, in BRAM)
     hls/weights/pcnn_config.h       generated dims/constants/normalization
@@ -55,7 +57,21 @@ Demo weights are already generated. For real weights, train with the repo
 `tb_x.txt`/`tb_ref.txt` are regenerated with the PyTorch model, so the HLS
 C-sim re-verifies bit-consistency against PyTorch.
 
-### 2. HLS IP
+### 2. Harvard Dataset Testing (Optional)
+You can generate test vectors from real-world data and test the accelerator accuracy natively using standard C++ (no Xilinx tools required):
+
+    # 1. Generate test vectors
+    ./harvard_to_pcnn.py --harvard "data_...csv" --mid "Mid.csv" \
+        --config pcnn_zcu102/hls/weights/pcnn_config.h --outdir ./out --rooms 5.417
+
+    # 2. Run C-Simulation using native GCC
+    cd pcnn_zcu102/hls
+    g++ -I./weights -I. pcnn.cpp pcnn_tb.cpp -o pcnn_sim
+    ./pcnn_sim ../../out/5.417_tb_x.txt ../../out/5.417_tb_y.txt
+
+The testbench dynamically detects the 1-column `tb_y.txt` and reports RMSE against the ground truth room temperature.
+
+### 3. HLS IP
 
     cd hls
     vitis_hls -f run_hls.tcl
@@ -65,7 +81,7 @@ Runs C-sim (must print `TEST PASSED`), synthesis, and exports the IP to
 on the achieved II of the dot-product loops — vastly faster than the 15-min
 control interval, and deterministic (no OS jitter).
 
-### 3. Vivado block design (Vivado 2022.x+)
+### 4. Vivado block design (Vivado 2022.x+)
 1. New project, board = ZCU102. Create block design.
 2. Add **Zynq UltraScale+ MPSoC**, run block automation (apply board preset).
 3. Settings: enable one PS-PL master (M_AXI_HPM0_FPD or LPD).
@@ -76,7 +92,7 @@ control interval, and deterministic (no OS jitter).
 6. Validate, create HDL wrapper, generate bitstream, **File -> Export ->
    Export Hardware (include bitstream)** -> `pcnn_zcu102.xsa`.
 
-### 4. Vitis bare-metal app
+### 5. Vitis bare-metal app
 1. `vitis -w work` -> platform project from `pcnn_zcu102.xsa`
    (standalone, psu_cortexa53_0).
 2. Application project on that platform; add `vitis/main.c`, the generated
@@ -100,8 +116,8 @@ All stages compare T, D, E with tolerance 1e-3 in normalized units
   PyTorch. For a smaller/faster design, switch to `ap_fixed<24,8>` and
   re-run C-sim to measure quantization error (E-module constants span
   ~1e-3..1e2, so keep >= 16 fractional bits).
-* **Throughput**: increase `PAR` in `pcnn.cpp` (8 -> 16/32) and add
-  `ARRAY_PARTITION` on the weight arrays for more parallel MACs; the ZCU9EG
+* **Throughput**: `PAR` in `pcnn.cpp` is optimized to 16 with `ARRAY_PARTITION`
+  on the weight arrays for massive parallel MACs; the ZCU9EG
   has 2520 DSPs, the model needs ~345k MACs/step.
 * **Padded sequences**: the training-time zeroing of padded outputs
   (`x[..,0] < 1e-6`) is a batching artifact and intentionally omitted.

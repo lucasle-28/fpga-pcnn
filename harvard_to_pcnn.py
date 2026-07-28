@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env ./.venv/bin/python
 """
 Harvard SEC processed data  ->  PCNN-Comparison 'Mid.csv' schema
                             ->  normalized test vectors for fpga-pcnn
