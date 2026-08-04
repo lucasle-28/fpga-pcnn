@@ -9,11 +9,41 @@
 #define WARM 8
 
 int main(int argc, char **argv) {
-    const char *xf = (argc > 1) ? argv[1] : "tb_data/tb_x.txt";
-    const char *rf = (argc > 2) ? argv[2] : "tb_data/tb_ref.txt";
-    FILE *fx = fopen(xf, "r");
-    FILE *fr = fopen(rf, "r");
-    if (!fx) { printf("cannot open tb_x file: %s\n", xf); return 1; }
+    // Try multiple paths: Vitis HLS runs csim from a nested build directory
+    const char *x_paths[] = {
+        (argc > 1) ? argv[1] : NULL,
+        "tb_data/tb_x.txt",
+        "../tb_data/tb_x.txt",
+        "../../tb_data/tb_x.txt",
+        "../../../tb_data/tb_x.txt",
+        "../../../../tb_data/tb_x.txt",
+        "../../../../../tb_data/tb_x.txt",
+        "../../../../../../tb_data/tb_x.txt",
+        "/home/sukote/Documents/pcnn_unrol/pcnn_zcu102/hls/tb_data/tb_x.txt",
+        "/home/sukote/Documents/pcnn/pcnn_zcu102/hls/tb_data/tb_x.txt",
+        "/home/lucas/Documents/pcnn/pcnn_zcu102/hls/tb_data/tb_x.txt",
+        NULL
+    };
+    const char *r_paths[] = {
+        (argc > 2) ? argv[2] : NULL,
+        "tb_data/tb_ref.txt",
+        "../tb_data/tb_ref.txt",
+        "../../tb_data/tb_ref.txt",
+        "../../../tb_data/tb_ref.txt",
+        "../../../../tb_data/tb_ref.txt",
+        "../../../../../tb_data/tb_ref.txt",
+        "../../../../../../tb_data/tb_ref.txt",
+        "/home/sukote/Documents/pcnn_unrol/pcnn_zcu102/hls/tb_data/tb_ref.txt",
+        "/home/sukote/Documents/pcnn/pcnn_zcu102/hls/tb_data/tb_ref.txt",
+        "/home/lucas/Documents/pcnn/pcnn_zcu102/hls/tb_data/tb_ref.txt",
+        NULL
+    };
+    FILE *fx = NULL;
+    for (int i = 0; x_paths[i] && !fx; i++) fx = fopen(x_paths[i], "r");
+    FILE *fr = NULL;
+    for (int i = 0; r_paths[i] && !fr; i++) fr = fopen(r_paths[i], "r");
+
+    if (!fx) { printf("cannot open tb_x file\n"); return 1; }
 
     static data_t x[SEQ][N_FEAT];
     static double ref[SEQ][3];
@@ -44,7 +74,7 @@ int main(int argc, char **argv) {
         fclose(fr);
     } else {
         has_ref = false;
-        printf("WARNING: No tb_ref provided (%s missing). Skipping comparison.\n", rf);
+        printf("WARNING: No tb_ref provided. Skipping comparison.\n");
     }
     fclose(fx);
 

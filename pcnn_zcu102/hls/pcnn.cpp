@@ -7,10 +7,10 @@
 // from pcnn_weights.h at synthesis time (~1.4 MB floats, fits ZCU102 BRAM).
 
 #include "pcnn.h"
-#include "pcnn_weights.h"
+#include "weights/pcnn_weights.h"
 #include <math.h>
 
-#define PAR 16   // dot-product lanes (partial-sum accumulators) — doubled from 8
+#define PAR 8    // dot-product lanes — reduced from 16 to fit ZCU102 DSP budget
 
 static inline data_t sigm(data_t v) { return 1.0f / (1.0f + expf(-v)); }
 
@@ -48,13 +48,17 @@ extern "C" void pcnn_step(const data_t x[N_FEAT], int mode,
 #pragma HLS INTERFACE s_axilite port=E_out  bundle=ctrl
 #pragma HLS INTERFACE s_axilite port=return bundle=ctrl
 
+    // Cap float multiplier instances to stay within ZCU102 DSP budget (2520)
+    // 840 fmul × ~3 DSP48E2 each ≈ 2520 DSPs. Tune after synthesis.
+#pragma HLS ALLOCATION operation instances=fmul limit=840
+
     // ---- persistent state --------------------------------------------------
     static data_t h[LSTM_L][LSTM_H];
     static data_t c[LSTM_L][LSTM_H];
 #pragma HLS ARRAY_PARTITION variable=h complete dim=1
-#pragma HLS ARRAY_PARTITION variable=h cyclic factor=16 dim=2
+#pragma HLS ARRAY_PARTITION variable=h cyclic factor=8 dim=2
 #pragma HLS ARRAY_PARTITION variable=c complete dim=1
-#pragma HLS ARRAY_PARTITION variable=c cyclic factor=16 dim=2
+#pragma HLS ARRAY_PARTITION variable=c cyclic factor=8 dim=2
     static data_t last_D = 0.0f;
     static data_t last_E = 0.0f;
 
@@ -62,7 +66,7 @@ extern "C" void pcnn_step(const data_t x[N_FEAT], int mode,
         for (int l = 0; l < LSTM_L; l++)
             for (int i = 0; i < LSTM_H; i++) {
 #pragma HLS PIPELINE II=1
-#pragma HLS UNROLL factor=16
+#pragma HLS UNROLL factor=8
                 h[l][i] = INIT_H[l * LSTM_H + i];
                 c[l][i] = INIT_C[l * LSTM_H + i];
             }
@@ -93,11 +97,11 @@ extern "C" void pcnn_step(const data_t x[N_FEAT], int mode,
     // Use inline selection functions instead — HLS constant-folds these.
 
     data_t layer_in[LSTM_H];   // max(IN_NN, LSTM_H)
-#pragma HLS ARRAY_PARTITION variable=layer_in cyclic factor=16
+#pragma HLS ARRAY_PARTITION variable=layer_in cyclic factor=8
     int in_sz = IN_NN;
     for (int i = 0; i < IN_NN; i++) {
 #pragma HLS PIPELINE II=1
-#pragma HLS UNROLL factor=16
+#pragma HLS UNROLL factor=8
         layer_in[i] = emb[i];
     }
 
@@ -112,6 +116,7 @@ extern "C" void pcnn_step(const data_t x[N_FEAT], int mode,
 #pragma HLS ARRAY_PARTITION variable=hn complete
 #pragma HLS ARRAY_PARTITION variable=cn complete
         for (int u = 0; u < LSTM_H; u++) {
+#pragma HLS UNROLL factor=2
             data_t gi = bih_l[0 * LSTM_H + u] + bhh_l[0 * LSTM_H + u]
                       + dot(&wih_l[(0 * LSTM_H + u) * in_sz], layer_in, in_sz)
                       + dot(&whh_l[(0 * LSTM_H + u) * LSTM_H], h[l], LSTM_H);
@@ -129,7 +134,7 @@ extern "C" void pcnn_step(const data_t x[N_FEAT], int mode,
         }
         for (int u = 0; u < LSTM_H; u++) {
 #pragma HLS PIPELINE II=1
-#pragma HLS UNROLL factor=16
+#pragma HLS UNROLL factor=8
             h[l][u] = hn[u];
             c[l][u] = cn[u];
             layer_in[u] = hn[u];
@@ -138,41 +143,41 @@ extern "C" void pcnn_step(const data_t x[N_FEAT], int mode,
     }
 
     // ---- layer norm --------------------------------------------------------
-    data_t ps_mean[16];
+    data_t ps_mean[PAR];
 #pragma HLS ARRAY_PARTITION variable=ps_mean complete
-    for (int i = 0; i < 16; i++) {
+    for (int i = 0; i < PAR; i++) {
 #pragma HLS UNROLL
         ps_mean[i] = 0.0f;
     }
-    for (int i = 0; i < LSTM_H; i += 16) {
+    for (int i = 0; i < LSTM_H; i += PAR) {
 #pragma HLS PIPELINE II=1
-        for (int j = 0; j < 16; j++) {
+        for (int j = 0; j < PAR; j++) {
 #pragma HLS UNROLL
             ps_mean[j] += layer_in[i + j];
         }
     }
     data_t mean = 0.0f;
-    for (int i = 0; i < 16; i++) {
+    for (int i = 0; i < PAR; i++) {
 #pragma HLS UNROLL
         mean += ps_mean[i];
     }
     mean /= (data_t)LSTM_H;
-    data_t ps_var[16];
+    data_t ps_var[PAR];
 #pragma HLS ARRAY_PARTITION variable=ps_var complete
-    for (int i = 0; i < 16; i++) {
+    for (int i = 0; i < PAR; i++) {
 #pragma HLS UNROLL
         ps_var[i] = 0.0f;
     }
-    for (int i = 0; i < LSTM_H; i += 16) {
+    for (int i = 0; i < LSTM_H; i += PAR) {
 #pragma HLS PIPELINE II=1
-        for (int j = 0; j < 16; j++) {
+        for (int j = 0; j < PAR; j++) {
 #pragma HLS UNROLL
             data_t d = layer_in[i + j] - mean;
             ps_var[j] += d * d;
         }
     }
     data_t var = 0.0f;
-    for (int i = 0; i < 16; i++) {
+    for (int i = 0; i < PAR; i++) {
 #pragma HLS UNROLL
         var += ps_var[i];
     }
@@ -182,7 +187,7 @@ extern "C" void pcnn_step(const data_t x[N_FEAT], int mode,
 #pragma HLS ARRAY_PARTITION variable=ln complete
     for (int i = 0; i < LSTM_H; i++) {
 #pragma HLS PIPELINE II=1
-#pragma HLS UNROLL factor=16
+#pragma HLS UNROLL factor=8
         ln[i] = (layer_in[i] - mean) * inv_std * LN_G[i] + LN_B[i];
     }
 

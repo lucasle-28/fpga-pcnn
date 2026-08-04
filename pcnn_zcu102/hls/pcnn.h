@@ -5,7 +5,7 @@
 #ifndef PCNN_H
 #define PCNN_H
 
-#include "pcnn_config.h"
+#include "weights/pcnn_config.h"
 
 typedef float data_t;   // change to ap_fixed<W,I> for a quantized build
 
