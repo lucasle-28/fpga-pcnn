@@ -10,10 +10,41 @@
 #include "weights/pcnn_weights.h"
 #include <math.h>
 
-#define PAR 8    // dot-product lanes — reduced from 16 to fit ZCU102 DSP budget
+#define PAR 4    // dot-product lanes — reduced from 16 to fit ZCU102 DSP budget
+
+// ---- LUT-based sigmoid & tanh (512 entries, range [-8,8]) ------------------
+// Replaces expf/tanhf polynomial cores (generic_tanh_float_s = 5 DSP each)
+// with BRAM lookups + 1 fmul interpolation. DSP cost moves from dedicated
+// uncapped modules into the shared fmul pool (covered by ALLOCATION limit).
+#define LUT_N    512
+#define LUT_XMIN (-8.0f)
+#define LUT_XMAX ( 8.0f)
+#define LUT_INV_DX (LUT_N / (LUT_XMAX - LUT_XMIN))   // = 32.0
+
+// Pre-computed at elaboration time by Vitis HLS (const → BRAM/LUTROM)
+static const float SIGM_LUT[LUT_N + 1] = {
+#include "weights/sigm_lut512.inc"
+};
+static const float TANH_LUT[LUT_N + 1] = {
+#include "weights/tanh_lut512.inc"
+};
+
+static inline data_t lut_interp(const float *tbl, data_t v,
+                                data_t lo, data_t hi) {
+    #pragma HLS INLINE
+    if (v <= LUT_XMIN) return lo;
+    if (v >= LUT_XMAX) return hi;
+    data_t fi = (v - LUT_XMIN) * LUT_INV_DX;   // fmul by constant
+    int i = (int)fi;
+    data_t frac = fi - (data_t)i;
+    return tbl[i] + frac * (tbl[i + 1] - tbl[i]);  // 1 fmul + 1 fadd
+}
 
 static inline data_t sigm(data_t v) {
-    return 1.0f / (1.0f + expf(-v));
+    return lut_interp(SIGM_LUT, v, 0.0f, 1.0f);
+}
+static inline data_t tanh_lut(data_t v) {
+    return lut_interp(TANH_LUT, v, -1.0f, 1.0f);
 }
 
 // dot product with PAR partial sums so the pipeline reaches low II with floats
@@ -134,8 +165,8 @@ extern "C" void pcnn_step(const data_t x[N_FEAT], int mode,
             data_t go = bih_l[3 * LSTM_H + u] + bhh_l[3 * LSTM_H + u]
                       + dot(&wih_l[(3 * LSTM_H + u) * in_sz], layer_in, in_sz)
                       + dot(&whh_l[(3 * LSTM_H + u) * LSTM_H], h[l], LSTM_H);
-            cn[u] = sigm(gf) * c[l][u] + sigm(gi) * tanhf(gg);
-            hn[u] = sigm(go) * tanhf(cn[u]);
+            cn[u] = sigm(gf) * c[l][u] + sigm(gi) * tanh_lut(gg);
+            hn[u] = sigm(go) * tanh_lut(cn[u]);
         }
         for (int u = 0; u < LSTM_H; u++) {
             #pragma HLS PIPELINE II=1
@@ -204,9 +235,9 @@ extern "C" void pcnn_step(const data_t x[N_FEAT], int mode,
     for (int i = 0; i < OUT_NN; i++) {
         #pragma HLS PIPELINE II=1
         #pragma HLS UNROLL factor=4
-        o1[i] = tanhf(dot(&W_OUT1[i * LSTM_H], ln, LSTM_H) + B_OUT1[i]);
+        o1[i] = tanh_lut(dot(&W_OUT1[i * LSTM_H], ln, LSTM_H) + B_OUT1[i]);
     }
-    data_t o2 = tanhf(dot(W_OUT2, o1, OUT_NN) + B_OUT2[0]);
+    data_t o2 = tanh_lut(dot(W_OUT2, o1, OUT_NN) + B_OUT2[0]);
 
     // ---- D module (ResNet-like) -------------------------------------------
     const data_t D = o2 / DIV_FACTOR + x_temp;
