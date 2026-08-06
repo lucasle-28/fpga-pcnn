@@ -10,10 +10,29 @@
 #include "weights/pcnn_weights.h"
 #include <math.h>
 
-#define PAR 8    // dot-product lanes — reduced from 16 to fit ZCU102 DSP budget
+#define PAR 4    // dot-product lanes — reduced from 8 to fit ZCU102 DSP budget
+
+// ---- LUT-based sigmoid (256 entries, range [-8,8]) -------------------------
+// Replaces expf polynomial core inside sigm() with BRAM lookup + 1 fmul
+// interpolation.  Eliminates generic_exp_float_s DSP modules.
+// tanh keeps using tanhf() (generic_tanh_float_s = 5 DSP, cheaper than LUT's 14).
+#define LUT_N    256
+#define LUT_XMIN (-8.0f)
+#define LUT_XMAX ( 8.0f)
+#define LUT_INV_DX (LUT_N / (LUT_XMAX - LUT_XMIN))   // = 16.0
+
+static const float SIGM_LUT[LUT_N + 1] = {
+#include "weights/sigm_lut256.inc"
+};
 
 static inline data_t sigm(data_t v) {
-    return 1.0f / (1.0f + expf(-v));
+    #pragma HLS INLINE
+    if (v <= LUT_XMIN) return 0.0f;
+    if (v >= LUT_XMAX) return 1.0f;
+    data_t fi = (v - LUT_XMIN) * LUT_INV_DX;
+    int i = (int)fi;
+    data_t frac = fi - (data_t)i;
+    return SIGM_LUT[i] + frac * (SIGM_LUT[i + 1] - SIGM_LUT[i]);
 }
 
 // dot product with PAR partial sums so the pipeline reaches low II with floats
@@ -52,9 +71,10 @@ extern "C" void pcnn_step(const data_t x[N_FEAT], int mode,
     #pragma HLS INTERFACE s_axilite port=E_out  bundle=ctrl
     #pragma HLS INTERFACE s_axilite port=return bundle=ctrl
 
-    // Cap float multiplier instances to stay within ZCU102 DSP budget (2520)
-    // 840 fmul × ~3 DSP48E2 each ≈ 2520 DSPs. Tune after synthesis.
-    #pragma HLS ALLOCATION operation instances=fmul limit=840
+    // Cap float operation instances to stay within ZCU102 DSP budget (2520)
+    // fmul: ~3 DSP48E2 each, fadd/fsub: ~2 DSP48E2 each.
+    #pragma HLS ALLOCATION operation instances=fmul limit=650
+    #pragma HLS ALLOCATION operation instances=fadd limit=600
 
     // ---- persistent state --------------------------------------------------
     static data_t h[LSTM_L][LSTM_H];
@@ -70,7 +90,6 @@ extern "C" void pcnn_step(const data_t x[N_FEAT], int mode,
         for (int l = 0; l < LSTM_L; l++) {
             for (int i = 0; i < LSTM_H; i++) {
                 #pragma HLS PIPELINE II=1
-                #pragma HLS UNROLL factor=8
                 h[l][i] = INIT_H[l * LSTM_H + i];
                 c[l][i] = INIT_C[l * LSTM_H + i];
             }
@@ -91,7 +110,6 @@ extern "C" void pcnn_step(const data_t x[N_FEAT], int mode,
     #pragma HLS ARRAY_PARTITION variable=emb complete
     for (int i = 0; i < IN_NN; i++) {
         #pragma HLS PIPELINE II=1
-        #pragma HLS UNROLL factor=8
         data_t a = W_IN[i * 2 + 0] * xin[0] + W_IN[i * 2 + 1] * xin[1] + B_IN[i];
         emb[i] = (a > 0.0f) ? a : 0.0f;
     }
@@ -106,7 +124,6 @@ extern "C" void pcnn_step(const data_t x[N_FEAT], int mode,
     int in_sz = IN_NN;
     for (int i = 0; i < IN_NN; i++) {
         #pragma HLS PIPELINE II=1
-        #pragma HLS UNROLL factor=8
         layer_in[i] = emb[i];
     }
 
@@ -139,7 +156,6 @@ extern "C" void pcnn_step(const data_t x[N_FEAT], int mode,
         }
         for (int u = 0; u < LSTM_H; u++) {
             #pragma HLS PIPELINE II=1
-            #pragma HLS UNROLL factor=8
             h[l][u] = hn[u];
             c[l][u] = cn[u];
             layer_in[u] = hn[u];
@@ -194,7 +210,6 @@ extern "C" void pcnn_step(const data_t x[N_FEAT], int mode,
     #pragma HLS ARRAY_PARTITION variable=ln complete
     for (int i = 0; i < LSTM_H; i++) {
         #pragma HLS PIPELINE II=1
-        #pragma HLS UNROLL factor=8
         ln[i] = (layer_in[i] - mean) * inv_std * LN_G[i] + LN_B[i];
     }
 
@@ -203,7 +218,6 @@ extern "C" void pcnn_step(const data_t x[N_FEAT], int mode,
     #pragma HLS ARRAY_PARTITION variable=o1 complete
     for (int i = 0; i < OUT_NN; i++) {
         #pragma HLS PIPELINE II=1
-        #pragma HLS UNROLL factor=4
         o1[i] = tanhf(dot(&W_OUT1[i * LSTM_H], ln, LSTM_H) + B_OUT1[i]);
     }
     data_t o2 = tanhf(dot(W_OUT2, o1, OUT_NN) + B_OUT2[0]);
