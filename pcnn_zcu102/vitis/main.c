@@ -11,7 +11,7 @@
 #include <stdio.h>
 #include "xparameters.h"
 #include "xpcnn_step.h"
-#include "xtime_l.h"
+
 #include "sleep.h"
 
 #include "pcnn_config.h"     /* RAW_MIN/RAW_MAX + column defines             */
@@ -46,16 +46,14 @@ static float pcnn_step_hw(const float x[6], int mode) {
 
 int main(void) {
     printf("\r\nPCNN on ZCU102 -- bare-metal demo\r\n");
-    if (XPcnn_step_Initialize(&ip, XPAR_PCNN_STEP_0_DEVICE_ID) != XST_SUCCESS) {
+    if (XPcnn_step_Initialize(&ip, XPAR_PCNN_STEP_0_BASEADDR) != XST_SUCCESS) {
         printf("IP init failed\r\n");
         return -1;
     }
 
     /* Replay one test day stored in demo_sequence.h:
      * DEMO_X[96][6] normalized inputs, DEMO_REF[96] golden T (normalized). */
-    XTime t0, t1;
     double max_err = 0.0;
-    XTime_GetTime(&t0);
     for (int t = 0; t < 96; t++) {
         int mode = (t == 0) ? MODE_RESET_WARM : (t < WARM_LEN) ? MODE_WARM : MODE_PRED;
         float T = pcnn_step_hw(DEMO_X[t], mode);
@@ -65,9 +63,6 @@ int main(void) {
             printf("t=%2d  T=%.3f C (ref %.3f C)\r\n",
                    t, denorm_temp(T), denorm_temp(DEMO_REF[t]));
     }
-    XTime_GetTime(&t1);
-    double us = 1.0 * (t1 - t0) / (COUNTS_PER_SECOND / 1000000.0);
-    printf("96 steps in %.1f us  (%.1f us/step)\r\n", us, us / 96.0);
     printf("max |err| vs golden: %e (normalized)\r\n", max_err);
     printf(max_err < 1e-3 ? "PASS\r\n" : "FAIL\r\n");
 
