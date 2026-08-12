@@ -1,0 +1,9 @@
+# Compiled binaries
+pcnn_zcu102/hls/pcnn_sim
+pcnn_zcu102/hls/pcnn_tb_*
+pcnn_zcu102/hls/test_approx
+
+# Python
+__pycache__/
+*.pyc
+.venv/
