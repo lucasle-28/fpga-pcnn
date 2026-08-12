@@ -101,13 +101,13 @@ Achieved at **100 MHz** on the XCZU9EG with all timing constraints met (WNS = 2.
 
 | Resource | Used | Available | Utilization |
 |----------|------|-----------|-------------|
-| LUT      | 26,344 | 274,080 | 9.61% |
-| LUTRAM   | 940 | 144,000 | 0.65% |
-| FF       | 23,248 | 548,160 | 4.24% |
-| BRAM     | 345 | 912 | 37.83% |
-| DSP      | 174 | 2,520 | 6.90% |
+| LUT      | 74,988 | 274,080 | 27.36% |
+| LUTRAM   | 2,047 | 144,000 | 1.42% |
+| FF       | 97,990 | 548,160 | 17.88% |
+| BRAM     | 385 | 912 | 42.21% |
+| DSP      | 712 | 2,520 | 28.25% |
 
-BRAM is the bottleneck (~38%) because the ~1.4M float32 weights are stored entirely on-chip. DSP usage is kept in check via `HLS ALLOCATION` pragmas that cap `fmul` at 650 and `fadd` at 600 instances, plus a LUT-based sigmoid that replaces expensive `expf` cores.
+BRAM is the bottleneck (~42%) because the ~1.4M float32 weights are stored entirely on-chip. DSP usage (~28%) is managed via `HLS ALLOCATION` pragmas that cap `fmul` at 650 and `fadd` at 600 instances, plus a LUT-based sigmoid that replaces expensive `expf` cores.
 
 ---
 
