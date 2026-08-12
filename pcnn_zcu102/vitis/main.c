@@ -51,20 +51,72 @@ int main(void) {
         return -1;
     }
 
-    /* Replay one test day stored in demo_sequence.h:
-     * DEMO_X[96][6] normalized inputs, DEMO_REF[96] golden T (normalized). */
-    double max_err = 0.0;
-    for (int t = 0; t < 96; t++) {
-        int mode = (t == 0) ? MODE_RESET_WARM : (t < WARM_LEN) ? MODE_WARM : MODE_PRED;
-        float T = pcnn_step_hw(DEMO_X[t], mode);
-        double e = T - DEMO_REF[t]; if (e < 0) e = -e;
-        if (e > max_err) max_err = e;
-        if (t % 12 == 0)
-            printf("t=%2d  T=%.3f C (ref %.3f C)\r\n",
-                   t, denorm_temp(T), denorm_temp(DEMO_REF[t]));
+#ifndef DEMO_HORIZONS
+#define DEMO_HORIZONS 1
+#endif
+#ifndef DEMO_SEQ
+#define DEMO_SEQ 96
+#endif
+
+    /* Replay test data stored in demo_sequence.h.
+     * Supports multiple 96-step horizons for Harvard dataset evaluation. */
+    double total_mse = 0.0;
+    int    total_pred = 0;
+
+    for (int h = 0; h < DEMO_HORIZONS; h++) {
+        int base = h * 96;
+        double horizon_mse = 0.0;
+        int    horizon_pred = 0;
+
+        for (int s = 0; s < 96; s++) {
+            int t = base + s;
+            int mode = (s == 0) ? MODE_RESET_WARM
+                     : (s < WARM_LEN) ? MODE_WARM : MODE_PRED;
+            float T = pcnn_step_hw(DEMO_X[t], mode);
+
+            /* Only count prediction steps (after warm-start) for RMSE */
+            if (s >= WARM_LEN) {
+                double e = (double)T - (double)DEMO_REF[t];
+                horizon_mse += e * e;
+                horizon_pred++;
+            }
+
+            if (h < 3 && (s < 4 || s % 24 == 0))
+                printf("h=%d t=%2d  T=%.3f C (gt %.3f C)\r\n",
+                       h, s, denorm_temp(T), denorm_temp(DEMO_REF[t]));
+        }
+
+        double h_rmse = 0.0;
+        if (horizon_pred > 0) {
+            /* Newton's method sqrt (bare-metal, no libm double sqrt) */
+            double val = horizon_mse / horizon_pred;
+            double guess = val;
+            for (int i = 0; i < 20 && guess > 0; i++)
+                guess = 0.5 * (guess + val / guess);
+            h_rmse = guess;
+        }
+
+        total_mse += horizon_mse;
+        total_pred += horizon_pred;
+
+        if (DEMO_HORIZONS <= 10 || h % (DEMO_HORIZONS / 10) == 0)
+            printf("horizon %3d/%d  RMSE(norm)=%.6f  (~%.3f degC)\r\n",
+                   h, DEMO_HORIZONS, h_rmse,
+                   h_rmse * (RAW_MAX[COL_T] - RAW_MIN[COL_T]) / 0.8f);
     }
-    printf("max |err| vs golden: %e (normalized)\r\n", max_err);
-    printf(max_err < 1e-3 ? "PASS\r\n" : "FAIL\r\n");
+
+    /* Overall RMSE across all prediction steps */
+    double overall_rmse = 0.0;
+    if (total_pred > 0) {
+        overall_rmse = total_mse / total_pred;
+        for (int i = 0; i < 20; i++)
+            overall_rmse = 0.5 * (overall_rmse + (total_mse / total_pred) / overall_rmse);
+    }
+    printf("\r\n=== Overall: %d horizons, %d prediction steps ===\r\n",
+           DEMO_HORIZONS, total_pred);
+    printf("RMSE (normalized): %.6f\r\n", overall_rmse);
+    printf("RMSE (degC):       %.3f\r\n",
+           overall_rmse * (RAW_MAX[COL_T] - RAW_MIN[COL_T]) / 0.8f);
 
     /* In deployment: at each 15-min tick read sensors, normalize with
      * norm_feat(), call pcnn_step_hw(). Re-warm-start with measured room
