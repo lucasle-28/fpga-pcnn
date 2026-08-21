@@ -3,45 +3,37 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cmath>
+#include <cstring>
 #include "pcnn.h"
 
 #define SEQ 96
 #define WARM 8
 
+// Vitis HLS runs csim from a nested build directory, so when no explicit path
+// is given we walk up looking for tb_data/. An explicit path always wins.
+static FILE *open_tb(const char *explicit_path, const char *name) {
+    if (explicit_path) {
+        FILE *f = fopen(explicit_path, "r");
+        if (!f) printf("cannot open %s\n", explicit_path);
+        return f;
+    }
+    char buf[512];
+    for (int up = 0; up <= 6; up++) {
+        buf[0] = '\0';
+        for (int i = 0; i < up; i++) strcat(buf, "../");
+        strcat(buf, "tb_data/");
+        strcat(buf, name);
+        FILE *f = fopen(buf, "r");
+        if (f) return f;
+    }
+    return NULL;
+}
+
+// usage: pcnn_sim [tb_x.txt] [tb_ref.txt | tb_y.txt]
+//        no args -> tb_data/ golden vectors (this is how csim_design runs it)
 int main(int argc, char **argv) {
-    // Try multiple paths: Vitis HLS runs csim from a nested build directory
-    const char *x_paths[] = {
-        (argc > 1) ? argv[1] : NULL,
-        "tb_data/tb_x.txt",
-        "../tb_data/tb_x.txt",
-        "../../tb_data/tb_x.txt",
-        "../../../tb_data/tb_x.txt",
-        "../../../../tb_data/tb_x.txt",
-        "../../../../../tb_data/tb_x.txt",
-        "../../../../../../tb_data/tb_x.txt",
-        "/home/sukote/Documents/pcnn_unrol/pcnn_zcu102/hls/tb_data/tb_x.txt",
-        "/home/sukote/Documents/pcnn/pcnn_zcu102/hls/tb_data/tb_x.txt",
-        "/home/lucas/Documents/pcnn/pcnn_zcu102/hls/tb_data/tb_x.txt",
-        NULL
-    };
-    const char *r_paths[] = {
-        (argc > 2) ? argv[2] : NULL,
-        "tb_data/tb_ref.txt",
-        "../tb_data/tb_ref.txt",
-        "../../tb_data/tb_ref.txt",
-        "../../../tb_data/tb_ref.txt",
-        "../../../../tb_data/tb_ref.txt",
-        "../../../../../tb_data/tb_ref.txt",
-        "../../../../../../tb_data/tb_ref.txt",
-        "/home/sukote/Documents/pcnn_unrol/pcnn_zcu102/hls/tb_data/tb_ref.txt",
-        "/home/sukote/Documents/pcnn/pcnn_zcu102/hls/tb_data/tb_ref.txt",
-        "/home/lucas/Documents/pcnn/pcnn_zcu102/hls/tb_data/tb_ref.txt",
-        NULL
-    };
-    FILE *fx = NULL;
-    for (int i = 0; x_paths[i] && !fx; i++) fx = fopen(x_paths[i], "r");
-    FILE *fr = NULL;
-    for (int i = 0; r_paths[i] && !fr; i++) fr = fopen(r_paths[i], "r");
+    FILE *fx = open_tb(argc > 1 ? argv[1] : NULL, "tb_x.txt");
+    FILE *fr = open_tb(argc > 2 ? argv[2] : NULL, "tb_ref.txt");
 
     if (!fx) { printf("cannot open tb_x file\n"); return 1; }
 
@@ -117,7 +109,8 @@ int main(int argc, char **argv) {
         double rmseT = sqrt(mseT / SEQ);
         if (ref_is_y_only) {
             printf("Compared against GROUND TRUTH (tb_y.txt)\n");
-            printf("T_room RMSE (norm): %.4f  (approx %.3f degC)\n", rmseT, rmseT * (40.0)); // Rough un-norm scale
+            printf("T_room RMSE (norm): %.4f  (approx %.3f degC)\n",
+                   rmseT, rmseT * (RAW_MAX[COL_T] - RAW_MIN[COL_T]) / 0.8);
             return 0; // Success if we just wanted to measure RMSE
         } else {
             printf("max |err| over T,D,E: %.3e   (T only: %.3e)\n", max_err, max_errT);

@@ -4,14 +4,14 @@ Convert Harvard-generated test vectors (tb_x.txt + tb_y.txt) into
 vitis/demo_sequence.h for bare-metal testing on the ZCU102.
 
 Usage:
-    python make_harvard_header.py ../../out/5.417_tb_x.txt ../../out/5.417_tb_y.txt \
-        --horizons 1 --start 0 > ../vitis/demo_sequence.h
-python3 make_harvard_header.py \
-    ../../out/5.417_tb_x.txt ../../out/5.417_tb_y.txt \
-    --horizons 195 > ../vitis/demo_sequence.h
+    python3 make_harvard_header.py <tb_x.txt> <tb_y.txt> [options] > ../vitis/demo_sequence.h
 
     --horizons N   number of 96-step horizons to embed (default: 1)
     --start    H   which horizon index to start from   (default: 0)
+
+Example (all 195 Harvard horizons, run from pcnn_zcu102/python/):
+    python3 make_harvard_header.py ../../out/5.417_tb_x.txt ../../out/5.417_tb_y.txt \
+        --horizons 195 > ../vitis/demo_sequence.h
 
 The generated header defines:
     DEMO_HORIZONS   number of horizons embedded

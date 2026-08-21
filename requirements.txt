@@ -1,0 +1,7 @@
+# Test-vector generation + weight export (harvard_to_pcnn.py, make_harvard_header.py)
+numpy>=1.24
+pandas>=2.0
+
+# Optional, only for regenerating weights:
+#   pcnn_jax.py                -> jax, jaxlib
+#   export_weights_pytorch.py  -> torch

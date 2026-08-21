@@ -7,3 +7,12 @@ pcnn_zcu102/hls/test_approx
 __pycache__/
 *.pyc
 .venv/
+
+# HLS / Vivado build output
+pcnn_zcu102/hls/pcnn_hls/
+vivado_*/
+.Xil/
+*.xpr
+*.jou
+*.str
+vivado*.log
